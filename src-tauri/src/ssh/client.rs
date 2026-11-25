@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse, Msg};
+use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::{decode_secret_key, load_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, ChannelOpenFailure, Pty};
 use tauri::{AppHandle, Emitter};
@@ -610,9 +611,7 @@ async fn authenticate_handle(
             }
         }
         AuthMethod::Agent => {
-            let mut agent = russh::keys::agent::client::AgentClient::connect_env()
-                .await
-                .map_err(|e| AppError::Auth(format!("无法连接本地 SSH Agent (SSH_AUTH_SOCK): {e}")))?;
+            let mut agent = connect_ssh_agent().await?;
             let identities = agent
                 .request_identities()
                 .await
@@ -665,6 +664,55 @@ async fn authenticate_handle(
         }
     }
     Ok(())
+}
+
+/// 连接本地 SSH Agent（Unix 通过 `SSH_AUTH_SOCK`，Windows 依次尝试 `SSH_AUTH_SOCK`、OpenSSH Named Pipe 与 Pageant）
+async fn connect_ssh_agent() -> AppResult<AgentClient<Box<dyn AgentStream + Send + Unpin>>> {
+    #[cfg(unix)]
+    {
+        AgentClient::connect_env()
+            .await
+            .map(AgentClient::dynamic)
+            .map_err(|e| AppError::Auth(format!("无法连接本地 SSH Agent (SSH_AUTH_SOCK): {e}")))
+    }
+    #[cfg(windows)]
+    {
+        const DEFAULT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+        let mut errors = Vec::new();
+        let env_sock = std::env::var_os("SSH_AUTH_SOCK").filter(|v| !v.is_empty());
+
+        if let Some(ref sock) = env_sock {
+            match AgentClient::connect_named_pipe(sock).await {
+                Ok(client) => return Ok(client.dynamic()),
+                Err(e) => errors.push(format!("SSH_AUTH_SOCK ({}): {e}", sock.to_string_lossy())),
+            }
+        }
+
+        let already_tried_default = env_sock
+            .as_ref()
+            .is_some_and(|v| v.to_string_lossy().eq_ignore_ascii_case(DEFAULT_PIPE));
+        if !already_tried_default {
+            match AgentClient::connect_named_pipe(DEFAULT_PIPE).await {
+                Ok(client) => return Ok(client.dynamic()),
+                Err(e) => errors.push(format!("Named Pipe ({DEFAULT_PIPE}): {e}")),
+            }
+        }
+
+        match AgentClient::connect_pageant().await {
+            Ok(client) => Ok(client.dynamic()),
+            Err(e) => {
+                errors.push(format!("Pageant: {e}"));
+                Err(AppError::Auth(format!(
+                    "无法连接本地 SSH Agent（已尝试 {}）",
+                    errors.join("；")
+                )))
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(AppError::Auth("当前平台暂不支持本地 SSH Agent 认证".into()))
+    }
 }
 
 /// 展开路径前导 `~` 为当前用户主目录
