@@ -5,7 +5,7 @@ export default {
   git: {
     // 提交消息模板
     commitMessage: 'chore(release): release v${version}',
-    // Git Tag模板
+    // Git Tag 模板
     tagName: 'v${version}',
   },
   npm: {
