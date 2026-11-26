@@ -21,6 +21,7 @@ import {
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
 import Badge from '@/components/ui/Badge.vue';
+import Select from '@/components/ui/Select.vue';
 import { cloneHostProfile, useHostsStore } from '@/stores/hosts';
 import { isTauriRuntime, tauriApi } from '@/lib/tauri';
 import type { HostProfile } from '@/types/ssh';
@@ -58,7 +59,10 @@ const authLabelKey = (host: HostProfile): string => {
   }
 };
 
-const groupOptions = computed(() => ['__ALL__', ...hostsStore.groups]);
+const groupSelectOptions = computed(() => [
+  { label: t('hosts.allGroups'), value: '__ALL__' },
+  ...hostsStore.groups.map((group) => ({ label: group, value: group })),
+]);
 
 async function handleExport(): Promise<void> {
   try {
@@ -162,10 +166,10 @@ async function handleImportFile(event: Event): Promise<void> {
         />
       </div>
 
-      <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+      <div class="flex items-center gap-2">
         <button
           type="button"
-          class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer"
+          class="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border px-2.5 text-[11px] font-medium transition-colors cursor-pointer"
           :class="
             hostsStore.favoritesOnly
               ? 'border-amber-500/40 bg-amber-500/15 text-amber-600 dark:text-amber-300'
@@ -177,20 +181,12 @@ async function handleImportFile(event: Event): Promise<void> {
           {{ t('hosts.favoritesOnly') }}
         </button>
 
-        <button
-          v-for="group in groupOptions"
-          :key="group"
-          type="button"
-          class="shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer"
-          :class="
-            hostsStore.selectedGroup === group
-              ? 'border-primary/40 bg-primary/15 text-primary'
-              : 'border-border/80 text-muted-foreground hover:bg-accent'
-          "
-          @click="hostsStore.selectedGroup = group"
-        >
-          {{ group === '__ALL__' ? t('hosts.allGroups') : group }}
-        </button>
+        <Select
+          v-model="hostsStore.selectedGroup"
+          :options="groupSelectOptions"
+          :aria-label="t('hosts.allGroups')"
+          class="h-7 min-w-0 flex-1 px-2 py-0 text-[11px]"
+        />
       </div>
 
       <!-- 导入/导出操作反馈条（独立一行，不被分组横滑容器裁剪） -->
@@ -254,17 +250,10 @@ async function handleImportFile(event: Event): Promise<void> {
                 <span class="truncate text-sm font-medium text-foreground">
                   {{ host.name || host.host }}
                 </span>
-                <button
-                  type="button"
-                  class="text-muted-foreground transition-colors hover:text-amber-500 cursor-pointer"
-                  :title="host.favorite ? t('hosts.unfavorite') : t('hosts.favorite')"
-                  @click.stop="hostsStore.toggleFavorite(host.id)"
-                >
-                  <Star
-                    class="h-3.5 w-3.5"
-                    :class="host.favorite ? 'fill-amber-400 text-amber-400' : ''"
-                  />
-                </button>
+                <Star
+                  v-if="host.favorite"
+                  class="h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400"
+                />
               </div>
               <p class="truncate font-mono text-[11px] text-muted-foreground">
                 {{ host.username }}@{{ host.host }}:{{ host.port }}
@@ -301,46 +290,50 @@ async function handleImportFile(event: Event): Promise<void> {
           </Badge>
         </div>
 
-        <!-- 悬停操作按钮条 -->
+        <!-- 悬停操作图标条（仅保留图标，鼠标悬停显示提示文案） -->
         <div
           class="mt-2 flex items-center justify-end gap-1 border-t border-border/50 pt-2 opacity-80 group-hover:opacity-100"
         >
           <button
             type="button"
-            class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] transition-colors cursor-pointer"
+            class="inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors cursor-pointer"
             :class="
               host.favorite
                 ? 'text-amber-600 hover:bg-amber-500/10 dark:text-amber-300'
                 : 'text-muted-foreground hover:bg-accent hover:text-foreground'
             "
+            :title="host.favorite ? t('hosts.unfavorite') : t('hosts.favorite')"
+            :aria-label="host.favorite ? t('hosts.unfavorite') : t('hosts.favorite')"
             @click.stop="hostsStore.toggleFavorite(host.id)"
           >
-            <Star class="h-3 w-3" :class="host.favorite ? 'fill-amber-400 text-amber-400' : ''" />
-            {{ host.favorite ? t('hosts.unfavorite') : t('hosts.favorite') }}
+            <Star class="h-3.5 w-3.5" :class="host.favorite ? 'fill-amber-400 text-amber-400' : ''" />
           </button>
           <button
             type="button"
-            class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"
+            class="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
+            :title="t('common.edit')"
+            :aria-label="t('common.edit')"
             @click.stop="emit('editHost', host)"
           >
-            <Pencil class="h-3 w-3" />
-            {{ t('common.edit') }}
+            <Pencil class="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
-            class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"
+            class="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
+            :title="t('hosts.duplicate')"
+            :aria-label="t('hosts.duplicate')"
             @click.stop="hostsStore.duplicateHost(host.id)"
           >
-            <Copy class="h-3 w-3" />
-            {{ t('hosts.duplicate') }}
+            <Copy class="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
-            class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-destructive/80 hover:bg-destructive/10 hover:text-destructive cursor-pointer"
+            class="inline-flex h-6 w-6 items-center justify-center rounded-md text-destructive/80 transition-colors hover:bg-destructive/10 hover:text-destructive cursor-pointer"
+            :title="t('hosts.delete')"
+            :aria-label="t('hosts.delete')"
             @click.stop="hostsStore.deleteHost(host.id)"
           >
-            <Trash2 class="h-3 w-3" />
-            {{ t('hosts.delete') }}
+            <Trash2 class="h-3.5 w-3.5" />
           </button>
         </div>
       </div>

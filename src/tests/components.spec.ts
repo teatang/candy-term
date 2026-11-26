@@ -182,7 +182,15 @@ describe('Vue 核心 UI 组件集成测试', () => {
     });
 
     expect(wrapper.text()).toContain('连接管理');
-    expect(wrapper.text()).toContain('收藏');
+    const groupSelect = wrapper.find('select');
+    expect(groupSelect.exists()).toBe(true);
+    await groupSelect.setValue('Default');
+    expect(store.selectedGroup).toBe('Default');
+    expect(wrapper.find('button[title="收藏"]').exists()).toBe(true);
+    expect(wrapper.find('button[title="编辑"]').exists()).toBe(true);
+    expect(wrapper.find('button[title="复制配置"]').exists()).toBe(true);
+    expect(wrapper.find('button[title="删除"]').exists()).toBe(true);
+    expect(wrapper.find('button[title="编辑"]').text()).toBe('');
 
     await wrapper.find('button[title="导出配置"]').trigger('click');
     expect(createObjectUrlSpy).toHaveBeenCalledTimes(1);
