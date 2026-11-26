@@ -74,6 +74,10 @@ export const tauriApi = {
     return callBackend<void>('save_hosts', { hosts });
   },
 
+  async exportHostsFile(path: string, hosts: HostProfile[]): Promise<void> {
+    return callBackend<void>('export_hosts_file', { path, hosts });
+  },
+
   async loadSnippets(): Promise<CommandSnippet[]> {
     return callBackend<CommandSnippet[]>('load_snippets');
   },
@@ -195,9 +199,12 @@ export const tauriApi = {
     return Array.isArray(selected) ? selected[0] ?? null : selected;
   },
 
-  async pickSavePath(defaultName: string): Promise<string | null> {
+  async pickSavePath(
+    defaultName: string,
+    filters?: Array<{ name: string; extensions: string[] }>,
+  ): Promise<string | null> {
     if (!isTauriRuntime()) return null;
-    return save({ defaultPath: defaultName });
+    return save({ defaultPath: defaultName, filters });
   },
 
   async onTerminalOutput(handler: (payload: TerminalOutputPayload) => void): Promise<UnlistenFn> {

@@ -8,6 +8,7 @@ import {
   EyeOff,
   File,
   Folder,
+  FolderOpen,
   FolderPlus,
   Home,
   Link2,
@@ -44,12 +45,12 @@ const visibleEntries = computed(() => {
 });
 
 watch(
-  () => [session.value?.id, session.value?.status, session.value?.sftpPath] as const,
-  ([sid, status, remotePath]) => {
+  () => [session.value?.id, session.value?.status, session.value?.sftpActivated, session.value?.sftpPath] as const,
+  ([sid, status, activated, remotePath]) => {
     if (remotePath) {
       pathInput.value = remotePath;
     }
-    if (sid && status === 'connected' && isTauriRuntime() && session.value?.sftpEntries.length === 0) {
+    if (sid && status === 'connected' && activated && isTauriRuntime() && session.value?.sftpEntries.length === 0) {
       void navigateTo('.');
     }
   },
@@ -171,6 +172,23 @@ async function handleDrop(event: DragEvent): Promise<void> {
   >
     <div v-if="!session || !isConnected" class="flex flex-1 items-center justify-center p-6 text-center">
       <p class="text-xs text-muted-foreground">{{ t('sftp.needConnection') }}</p>
+    </div>
+
+    <div
+      v-else-if="!session.sftpActivated"
+      class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center"
+    >
+      <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+        <FolderOpen class="h-5 w-5" />
+      </div>
+      <div class="space-y-1">
+        <p class="text-xs font-medium text-foreground">{{ t('sftp.idleTitle') }}</p>
+        <p class="text-[11px] leading-relaxed text-muted-foreground">{{ t('sftp.idleDesc') }}</p>
+      </div>
+      <Button size="sm" class="h-8 text-xs" @click="sessionStore.activateSftp(session.id)">
+        <FolderOpen class="h-3.5 w-3.5" />
+        {{ t('sftp.startService') }}
+      </Button>
     </div>
 
     <template v-else>

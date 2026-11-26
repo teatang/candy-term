@@ -5,6 +5,18 @@ import {
   tauriApi,
   type HostKeyChallengePayload,
 } from '@/lib/tauri';
+import {
+  collectLeaves,
+  createLeafNode,
+  findLeafByPaneId,
+  findLeafBySessionId,
+  removeLeafNode,
+  splitLeafNode,
+  updateSplitRatio,
+  type SplitDirection,
+  type SplitNode,
+} from '@/lib/splitLayout';
+import { cloneHostProfile } from '@/stores/hosts';
 import type {
   ActiveTunnel,
   HostProfile,
@@ -18,10 +30,22 @@ import type {
 type OutputSink = (chunk: string) => void;
 
 /**
- * SSH 会话、SFTP、端口转发与主机指纹验证状态 Store
+ * 终端标签页（内含可无限嵌套的二叉树分屏布局）
+ */
+export interface TerminalTab {
+  id: string;
+  title: string;
+  layout: SplitNode;
+  focusedPaneId: string;
+}
+
+/**
+ * SSH 会话、分屏标签页、SFTP、端口转发与主机指纹验证状态 Store
  */
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref<TerminalSession[]>([]);
+  const tabs = ref<TerminalTab[]>([]);
+  const activeTabId = ref<string | null>(null);
   const activeSessionId = ref<string | null>(null);
   const pendingChallenge = ref<HostKeyChallengePayload | null>(null);
   const knownHosts = ref<KnownHostEntry[]>([]);
@@ -36,6 +60,13 @@ export const useSessionStore = defineStore('sessions', () => {
    */
   const activeSession = computed<TerminalSession | null>(
     () => sessions.value.find((s) => s.id === activeSessionId.value) ?? null,
+  );
+
+  /**
+   * 当前聚焦的活动标签页
+   */
+  const activeTab = computed<TerminalTab | null>(
+    () => tabs.value.find((t) => t.id === activeTabId.value) ?? null,
   );
 
   /**
@@ -91,8 +122,105 @@ export const useSessionStore = defineStore('sessions', () => {
     outputSinks.delete(sessionId);
   }
 
+  function emitOutputChunk(sessionId: string, chunk: string): void {
+    const sink = outputSinks.get(sessionId);
+    if (sink) {
+      sink(chunk);
+    } else {
+      const list = bufferedOutputs.get(sessionId) ?? [];
+      list.push(chunk);
+      bufferedOutputs.set(sessionId, list);
+    }
+  }
+
   /**
-   * 基于主机配置新建并建立 SSH 终端会话
+   * 建立单个 SSH 会话连接（供新标签与分屏共用）
+   */
+  async function establishConnection(
+    session: TerminalSession,
+    host: HostProfile,
+    allHosts: HostProfile[],
+    cols: number,
+    rows: number,
+    autoStartForwards: boolean,
+  ): Promise<void> {
+    if (!isTauriRuntime()) {
+      session.status = 'connected';
+      const welcome =
+        `\r\n\x1b[38;5;212m🍬 candy-term preview shell\x1b[0m (${host.username}@${host.host}:${host.port})\r\n` +
+        `\x1b[90mNote: Browser preview mode active. Launch via \`pnpm tauri dev\` for native Rust SSH/SFTP.\x1b[0m\r\n\r\n` +
+        `${host.username}@${host.host}:~$ `;
+      emitOutputChunk(session.id, welcome);
+      return;
+    }
+
+    try {
+      await tauriApi.connectSession(session.id, host, allHosts, cols, rows);
+      session.status = 'connected';
+
+      if (autoStartForwards) {
+        for (const rule of host.forwards.filter((f) => f.autoStart)) {
+          try {
+            const tunnel = await tauriApi.startPortForward(session.id, rule);
+            session.tunnels.push(tunnel);
+          } catch (err) {
+            session.tunnels.push({
+              ruleId: rule.id,
+              sessionId: session.id,
+              name: rule.name,
+              forwardType: rule.forwardType,
+              bindAddress: `${rule.localHost}:${rule.localPort}`,
+              targetAddress: `${rule.remoteHost}:${rule.remotePort}`,
+              status: 'error',
+              error: String(err),
+            });
+          }
+        }
+      }
+    } catch (err) {
+      session.status = 'error';
+      session.errorMessage = String(err);
+    }
+  }
+
+  function createSessionObject(host: HostProfile): TerminalSession {
+    return {
+      id: crypto.randomUUID(),
+      hostId: host.id,
+      hostSnapshot: cloneHostProfile(host),
+      title: host.name || `${host.username}@${host.host}`,
+      hostAddress: `${host.host}:${host.port}`,
+      username: host.username,
+      color: host.color,
+      status: 'connecting',
+      sftpActivated: false,
+      sftpPath: '.',
+      sftpEntries: [],
+      sftpLoading: false,
+      metrics: null,
+      tunnels: [],
+      createdAt: Date.now(),
+    };
+  }
+
+  async function cleanupSingleSession(sessionId: string): Promise<void> {
+    if (isTauriRuntime()) {
+      try {
+        await tauriApi.disconnectSession(sessionId);
+      } catch {
+        // 忽略已断开会话的关闭异常
+      }
+    }
+    outputSinks.delete(sessionId);
+    bufferedOutputs.delete(sessionId);
+    const idx = sessions.value.findIndex((s) => s.id === sessionId);
+    if (idx >= 0) {
+      sessions.value.splice(idx, 1);
+    }
+  }
+
+  /**
+   * 基于主机配置新建标签页并建立 SSH 终端会话
    */
   async function openSession(
     host: HostProfile,
@@ -101,70 +229,194 @@ export const useSessionStore = defineStore('sessions', () => {
     rows = 30,
   ): Promise<TerminalSession> {
     await initEventListeners();
-    const sessionId = crypto.randomUUID();
-    const session: TerminalSession = {
-      id: sessionId,
-      hostId: host.id,
-      title: host.name || `${host.username}@${host.host}`,
-      hostAddress: `${host.host}:${host.port}`,
-      username: host.username,
-      color: host.color,
-      status: 'connecting',
-      sftpPath: '.',
-      sftpEntries: [],
-      sftpLoading: false,
-      metrics: null,
-      tunnels: [],
-      createdAt: Date.now(),
+    const session = createSessionObject(host);
+    const leaf = createLeafNode(session.id);
+    const tab: TerminalTab = {
+      id: crypto.randomUUID(),
+      title: session.title,
+      layout: leaf,
+      focusedPaneId: leaf.paneId,
     };
 
     sessions.value.push(session);
-    activeSessionId.value = sessionId;
+    tabs.value.push(tab);
+    activeTabId.value = tab.id;
+    activeSessionId.value = session.id;
 
-    if (!isTauriRuntime()) {
-      // 纯浏览器预览模式下的友好演示终端回显
-      session.status = 'connected';
-      const welcome =
-        `\r\n\x1b[38;5;212m🍬 candy-term preview shell\x1b[0m (${host.username}@${host.host}:${host.port})\r\n` +
-        `\x1b[90mNote: Browser preview mode active. Launch via \`pnpm tauri dev\` for native Rust SSH/SFTP.\x1b[0m\r\n\r\n` +
-        `${host.username}@${host.host}:~$ `;
-      const sink = outputSinks.get(sessionId);
-      if (sink) {
-        sink(welcome);
-      } else {
-        bufferedOutputs.set(sessionId, [welcome]);
-      }
-      return session;
+    await establishConnection(session, host, allHosts, cols, rows, true);
+    return session;
+  }
+
+  /**
+   * 对指定标签页内的目标终端窗口执行左右或上下分屏（支持无限嵌套分屏）
+   */
+  async function splitPane(
+    tabId: string,
+    targetPaneId: string,
+    direction: SplitDirection,
+    allHosts: HostProfile[],
+    cols = 80,
+    rows = 24,
+  ): Promise<TerminalSession | null> {
+    const tab = tabs.value.find((t) => t.id === tabId);
+    if (!tab) return null;
+
+    const targetLeaf = findLeafByPaneId(tab.layout, targetPaneId);
+    if (!targetLeaf) return null;
+
+    const sourceSession = sessions.value.find((s) => s.id === targetLeaf.sessionId);
+    if (!sourceSession) return null;
+
+    const host =
+      allHosts.find((h) => h.id === sourceSession.hostId) ?? sourceSession.hostSnapshot;
+    if (!host) return null;
+
+    await initEventListeners();
+    const newSession = createSessionObject(host);
+    const splitResult = splitLeafNode(tab.layout, targetPaneId, direction, newSession.id);
+    if (!splitResult.changed) return null;
+
+    sessions.value.push(newSession);
+    tab.layout = splitResult.root;
+    tab.focusedPaneId = splitResult.newPaneId;
+    activeTabId.value = tab.id;
+    activeSessionId.value = newSession.id;
+
+    await establishConnection(newSession, host, allHosts, cols, rows, false);
+    return newSession;
+  }
+
+  /**
+   * 切换活动标签页并同步聚焦窗格对应的会话
+   */
+  function selectTab(tabId: string): void {
+    const tab = tabs.value.find((t) => t.id === tabId);
+    if (!tab) return;
+    activeTabId.value = tab.id;
+    const focused =
+      findLeafByPaneId(tab.layout, tab.focusedPaneId) ?? collectLeaves(tab.layout)[0];
+    if (focused) {
+      tab.focusedPaneId = focused.paneId;
+      activeSessionId.value = focused.sessionId;
     }
+  }
 
-    try {
-      await tauriApi.connectSession(sessionId, host, allHosts, cols, rows);
-      session.status = 'connected';
+  /**
+   * 聚焦标签页中的某个分屏窗格
+   */
+  function focusPane(tabId: string, paneId: string): void {
+    const tab = tabs.value.find((t) => t.id === tabId);
+    if (!tab) return;
+    const leaf = findLeafByPaneId(tab.layout, paneId);
+    if (!leaf) return;
+    activeTabId.value = tab.id;
+    tab.focusedPaneId = paneId;
+    activeSessionId.value = leaf.sessionId;
+  }
 
-      // 自动拉起配置为自启动的端口转发规则
-      for (const rule of host.forwards.filter((f) => f.autoStart)) {
-        try {
-          const tunnel = await tauriApi.startPortForward(sessionId, rule);
-          session.tunnels.push(tunnel);
-        } catch (err) {
-          session.tunnels.push({
-            ruleId: rule.id,
-            sessionId,
-            name: rule.name,
-            forwardType: rule.forwardType,
-            bindAddress: `${rule.localHost}:${rule.localPort}`,
-            targetAddress: `${rule.remoteHost}:${rule.remotePort}`,
-            status: 'error',
-            error: String(err),
-          });
+  /**
+   * 更新分屏分割线比例
+   */
+  function setSplitRatio(tabId: string, splitId: string, ratio: number): void {
+    const tab = tabs.value.find((t) => t.id === tabId);
+    if (!tab) return;
+    tab.layout = updateSplitRatio(tab.layout, splitId, ratio);
+  }
+
+  /**
+   * 关闭单个分屏窗格；若为标签页内最后一个窗格，则一并关闭该标签页
+   */
+  async function closePane(tabId: string, paneId: string): Promise<void> {
+    const tabIdx = tabs.value.findIndex((t) => t.id === tabId);
+    if (tabIdx < 0) return;
+    const tab = tabs.value[tabIdx];
+    const result = removeLeafNode(tab.layout, paneId);
+    if (!result.removedSessionId) return;
+
+    await cleanupSingleSession(result.removedSessionId);
+
+    if (!result.root) {
+      tabs.value.splice(tabIdx, 1);
+      if (activeTabId.value === tabId) {
+        const nextTab = tabs.value[Math.max(0, tabIdx - 1)] ?? null;
+        activeTabId.value = nextTab?.id ?? null;
+        if (nextTab) {
+          const leaf =
+            findLeafByPaneId(nextTab.layout, nextTab.focusedPaneId) ??
+            collectLeaves(nextTab.layout)[0];
+          activeSessionId.value = leaf?.sessionId ?? null;
+        } else {
+          activeSessionId.value = null;
         }
       }
-    } catch (err) {
-      session.status = 'error';
-      session.errorMessage = String(err);
+      return;
     }
 
-    return session;
+    tab.layout = result.root;
+    const currentFocusedStillExists = findLeafByPaneId(tab.layout, tab.focusedPaneId);
+    const nextLeaf =
+      currentFocusedStillExists ??
+      (result.nextFocusPaneId ? findLeafByPaneId(tab.layout, result.nextFocusPaneId) : null) ??
+      collectLeaves(tab.layout)[0];
+    if (nextLeaf) {
+      tab.focusedPaneId = nextLeaf.paneId;
+      if (activeTabId.value === tabId) {
+        activeSessionId.value = nextLeaf.sessionId;
+      }
+    }
+  }
+
+  /**
+   * 关闭整个标签页及其下全部分屏会话
+   */
+  async function closeTab(tabId: string): Promise<void> {
+    const tabIdx = tabs.value.findIndex((t) => t.id === tabId);
+    if (tabIdx < 0) return;
+    const tab = tabs.value[tabIdx];
+    const leaves = collectLeaves(tab.layout);
+    for (const leaf of leaves) {
+      await cleanupSingleSession(leaf.sessionId);
+    }
+    tabs.value.splice(tabIdx, 1);
+    if (activeTabId.value === tabId) {
+      const nextTab = tabs.value[Math.max(0, tabIdx - 1)] ?? null;
+      activeTabId.value = nextTab?.id ?? null;
+      if (nextTab) {
+        const leaf =
+          findLeafByPaneId(nextTab.layout, nextTab.focusedPaneId) ??
+          collectLeaves(nextTab.layout)[0];
+        activeSessionId.value = leaf?.sessionId ?? null;
+      } else {
+        activeSessionId.value = null;
+      }
+    }
+  }
+
+  /**
+   * 原地重连指定会话（保留当前分屏窗格与终端缓冲区）
+   */
+  async function reconnectSession(
+    sessionId: string,
+    allHosts: HostProfile[],
+    cols = 100,
+    rows = 30,
+  ): Promise<void> {
+    const session = sessions.value.find((s) => s.id === sessionId);
+    if (!session) return;
+    const host = allHosts.find((h) => h.id === session.hostId) ?? session.hostSnapshot;
+    if (!host) return;
+
+    if (isTauriRuntime()) {
+      try {
+        await tauriApi.disconnectSession(sessionId);
+      } catch {
+        // 忽略已断开会话
+      }
+    }
+    session.status = 'connecting';
+    session.errorMessage = undefined;
+    session.tunnels = [];
+    await establishConnection(session, host, allHosts, cols, rows, false);
   }
 
   /**
@@ -209,24 +461,19 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   /**
-   * 关闭指定终端会话并清理后端通道
+   * 关闭指定终端会话（若处于分屏中则仅关闭对应分屏窗格）
    */
   async function closeSession(sessionId: string): Promise<void> {
-    if (isTauriRuntime()) {
-      try {
-        await tauriApi.disconnectSession(sessionId);
-      } catch {
-        // 忽略已断开会话的关闭异常
+    for (const tab of tabs.value) {
+      const leaf = findLeafBySessionId(tab.layout, sessionId);
+      if (leaf) {
+        await closePane(tab.id, leaf.paneId);
+        return;
       }
     }
-    outputSinks.delete(sessionId);
-    bufferedOutputs.delete(sessionId);
-    const idx = sessions.value.findIndex((s) => s.id === sessionId);
-    if (idx >= 0) {
-      sessions.value.splice(idx, 1);
-    }
+    await cleanupSingleSession(sessionId);
     if (activeSessionId.value === sessionId) {
-      activeSessionId.value = sessions.value[Math.max(0, idx - 1)]?.id ?? null;
+      activeSessionId.value = sessions.value[sessions.value.length - 1]?.id ?? null;
     }
   }
 
@@ -244,12 +491,23 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   /**
+   * 标记当前会话已启用 SFTP（仅在点击 SFTP 文件按钮后触发）
+   */
+  function activateSftp(sessionId: string): void {
+    const session = sessions.value.find((s) => s.id === sessionId);
+    if (session) {
+      session.sftpActivated = true;
+    }
+  }
+
+  /**
    * 刷新当前会话 SFTP 目录列表
    */
   async function refreshSftp(sessionId: string, path?: string): Promise<void> {
     const session = sessions.value.find((s) => s.id === sessionId);
     if (!session || session.status !== 'connected' || !isTauriRuntime()) return;
 
+    session.sftpActivated = true;
     session.sftpLoading = true;
     try {
       const targetPath = path ?? session.sftpPath ?? '.';
@@ -320,6 +578,9 @@ export const useSessionStore = defineStore('sessions', () => {
 
   return {
     sessions,
+    tabs,
+    activeTabId,
+    activeTab,
     activeSessionId,
     activeSession,
     pendingChallenge,
@@ -329,11 +590,19 @@ export const useSessionStore = defineStore('sessions', () => {
     registerOutputSink,
     unregisterOutputSink,
     openSession,
+    splitPane,
+    selectTab,
+    focusPane,
+    setSplitRatio,
+    closePane,
+    closeTab,
+    reconnectSession,
     sendInput,
     broadcastCommand,
     resizeSession,
     closeSession,
     resolveHostKeyChallenge,
+    activateSftp,
     refreshSftp,
     startForward,
     stopForward,

@@ -155,12 +155,14 @@ export interface CommandSnippet {
 export interface TerminalSession {
   id: string;
   hostId: string;
+  hostSnapshot?: HostProfile;
   title: string;
   hostAddress: string;
   username: string;
   color: string;
   status: SessionStatus;
   errorMessage?: string;
+  sftpActivated: boolean;
   sftpPath: string;
   sftpEntries: SftpEntry[];
   sftpLoading: boolean;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
   Activity,
@@ -23,6 +23,7 @@ import Button from '@/components/ui/Button.vue';
 import Badge from '@/components/ui/Badge.vue';
 import HostSidebar from '@/components/hosts/HostSidebar.vue';
 import HostDialog from '@/components/hosts/HostDialog.vue';
+import QuickConnectDialog from '@/components/hosts/QuickConnectDialog.vue';
 import HostKeyDialog from '@/components/terminal/HostKeyDialog.vue';
 import TerminalView from '@/components/terminal/TerminalView.vue';
 import SftpPanel from '@/components/sftp/SftpPanel.vue';
@@ -31,11 +32,18 @@ import SnippetsPanel from '@/components/tools/SnippetsPanel.vue';
 import ServerMonitorPanel from '@/components/tools/ServerMonitorPanel.vue';
 import SettingsDialog from '@/components/tools/SettingsDialog.vue';
 import { useHostsStore } from '@/stores/hosts';
-import { useSessionStore } from '@/stores/sessions';
+import { useSessionStore, type TerminalTab } from '@/stores/sessions';
 import { useSettingsStore } from '@/stores/settings';
 import { useSnippetStore } from '@/stores/snippets';
+import {
+  clampSplitRatio,
+  collectLeaves,
+  computeSplitLayout,
+  type PositionedDivider,
+  type SplitDirection,
+} from '@/lib/splitLayout';
 import { isTauriRuntime } from '@/lib/tauri';
-import type { HostProfile } from '@/types/ssh';
+import type { HostProfile, TerminalSession } from '@/types/ssh';
 
 const { t } = useI18n();
 const settings = useSettingsStore();
@@ -44,14 +52,42 @@ const sessionStore = useSessionStore();
 const snippetStore = useSnippetStore();
 
 type RightToolTab = 'sftp' | 'forwards' | 'snippets' | 'monitor';
-const rightPanelOpen = ref(true);
+const rightPanelOpen = ref(false);
 const rightTab = ref<RightToolTab>('sftp');
+const terminalFullscreen = ref(false);
 
 const hostDialogOpen = ref(false);
+const quickConnectOpen = ref(false);
 const editingHost = ref<HostProfile | null>(null);
 const settingsOpen = ref(false);
 
 const inDesktop = computed(() => isTauriRuntime());
+
+const sessionById = computed(() => {
+  const map = new Map<string, TerminalSession>();
+  for (const s of sessionStore.sessions) {
+    map.set(s.id, s);
+  }
+  return map;
+});
+
+const tabLayouts = computed(() => {
+  const map = new Map<string, ReturnType<typeof computeSplitLayout>>();
+  for (const tab of sessionStore.tabs) {
+    map.set(tab.id, computeSplitLayout(tab.layout));
+  }
+  return map;
+});
+
+function getTabFocusedSession(tab: TerminalTab): TerminalSession | undefined {
+  const leaves = collectLeaves(tab.layout);
+  const focused = leaves.find((l) => l.paneId === tab.focusedPaneId) ?? leaves[0];
+  return focused ? sessionById.value.get(focused.sessionId) : undefined;
+}
+
+function getTabPaneCount(tab: TerminalTab): number {
+  return tabLayouts.value.get(tab.id)?.leaves.length ?? 1;
+}
 
 function openNewHostDialog(): void {
   editingHost.value = null;
@@ -75,22 +111,103 @@ function handleHostSaved(host: HostProfile, connectNow: boolean): void {
 }
 
 async function reconnectSession(sessionId: string): Promise<void> {
-  const existing = sessionStore.sessions.find((s) => s.id === sessionId);
-  if (!existing) return;
-  const host = hostsStore.hosts.find((h) => h.id === existing.hostId);
-  if (!host) return;
-  await sessionStore.closeSession(sessionId);
-  await connectToHost(host);
+  await sessionStore.reconnectSession(sessionId, hostsStore.hosts);
+}
+
+async function handleSplitPane(tabId: string, paneId: string, direction: SplitDirection): Promise<void> {
+  sessionStore.focusPane(tabId, paneId);
+  await sessionStore.splitPane(tabId, paneId, direction, hostsStore.hosts);
 }
 
 function selectToolTab(tab: RightToolTab): void {
+  if (tab === 'sftp') {
+    const active = sessionStore.activeSession;
+    if (active && !active.sftpActivated) {
+      rightTab.value = 'sftp';
+      rightPanelOpen.value = true;
+      sessionStore.activateSftp(active.id);
+      return;
+    }
+  }
   if (rightPanelOpen.value && rightTab.value === tab) {
     rightPanelOpen.value = false;
   } else {
     rightTab.value = tab;
     rightPanelOpen.value = true;
+    if (tab === 'sftp' && sessionStore.activeSession) {
+      sessionStore.activateSftp(sessionStore.activeSession.id);
+    }
   }
 }
+
+function openSftpDrawerTab(): void {
+  rightTab.value = 'sftp';
+  if (sessionStore.activeSession) {
+    sessionStore.activateSftp(sessionStore.activeSession.id);
+  }
+}
+
+// 分屏拖拽调整比例状态
+const splitContainerRefs = new Map<string, HTMLElement>();
+let activeDragCleanup: (() => void) | null = null;
+
+function setSplitContainerRef(tabId: string, el: unknown): void {
+  if (el instanceof HTMLElement) {
+    splitContainerRefs.set(tabId, el);
+  } else {
+    splitContainerRefs.delete(tabId);
+  }
+}
+
+function startDividerDrag(tabId: string, divider: PositionedDivider, event: PointerEvent): void {
+  const container = splitContainerRefs.get(tabId);
+  if (!container) return;
+  event.preventDefault();
+  activeDragCleanup?.();
+
+  const handleMove = (moveEvent: PointerEvent) => {
+    const rect = container.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    if (divider.direction === 'horizontal') {
+      const pctX = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+      const ratio = clampSplitRatio((pctX - divider.parentRect.left) / divider.parentRect.width);
+      sessionStore.setSplitRatio(tabId, divider.splitId, ratio);
+    } else {
+      const pctY = ((moveEvent.clientY - rect.top) / rect.height) * 100;
+      const ratio = clampSplitRatio((pctY - divider.parentRect.top) / divider.parentRect.height);
+      sessionStore.setSplitRatio(tabId, divider.splitId, ratio);
+    }
+  };
+
+  const handleUp = () => {
+    activeDragCleanup?.();
+    activeDragCleanup = null;
+  };
+
+  window.addEventListener('pointermove', handleMove);
+  window.addEventListener('pointerup', handleUp);
+  window.addEventListener('pointercancel', handleUp);
+
+  activeDragCleanup = () => {
+    window.removeEventListener('pointermove', handleMove);
+    window.removeEventListener('pointerup', handleUp);
+    window.removeEventListener('pointercancel', handleUp);
+  };
+}
+
+watch(
+  () => sessionStore.tabs.length,
+  (len) => {
+    if (len === 0) {
+      terminalFullscreen.value = false;
+    }
+  },
+);
+
+onBeforeUnmount(() => {
+  activeDragCleanup?.();
+});
 
 onMounted(async () => {
   settings.applyThemeAndLocale();
@@ -246,36 +363,44 @@ onMounted(async () => {
       <main class="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
         <!-- 终端会话多标签条 -->
         <div
-          v-if="sessionStore.sessions.length > 0"
+          v-if="sessionStore.tabs.length > 0"
           class="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/70 bg-muted/35 px-2"
         >
           <div
-            v-for="session in sessionStore.sessions"
-            :key="session.id"
-            class="group flex h-7 max-w-[220px] shrink-0 items-center gap-2 rounded-lg border px-2.5 text-xs transition-all cursor-pointer"
+            v-for="tab in sessionStore.tabs"
+            :key="tab.id"
+            class="group flex h-7 max-w-[240px] shrink-0 items-center gap-2 rounded-lg border px-2.5 text-xs transition-all cursor-pointer"
             :class="
-              sessionStore.activeSessionId === session.id
+              sessionStore.activeTabId === tab.id
                 ? 'border-primary/40 bg-background text-foreground shadow-xs'
                 : 'border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground'
             "
-            @click="sessionStore.activeSessionId = session.id"
+            @click="sessionStore.selectTab(tab.id)"
           >
             <span
               class="h-2 w-2 shrink-0 rounded-full"
               :class="{
-                'bg-amber-400 animate-pulse': session.status === 'connecting',
-                'bg-emerald-500': session.status === 'connected',
-                'bg-zinc-400': session.status === 'disconnected',
-                'bg-destructive': session.status === 'error',
+                'bg-amber-400 animate-pulse': getTabFocusedSession(tab)?.status === 'connecting',
+                'bg-emerald-500': getTabFocusedSession(tab)?.status === 'connected',
+                'bg-zinc-400': getTabFocusedSession(tab)?.status === 'disconnected',
+                'bg-destructive': getTabFocusedSession(tab)?.status === 'error',
               }"
             />
-            <span class="truncate font-medium">{{ session.title }}</span>
+            <span class="truncate font-medium">{{ tab.title }}</span>
+            <Badge v-if="getTabPaneCount(tab) > 1" variant="secondary" class="px-1.5 py-0 text-[10px]">
+              {{ getTabPaneCount(tab) }}
+            </Badge>
             <button
-              v-if="session.status === 'disconnected' || session.status === 'error'"
+              v-if="
+                getTabFocusedSession(tab)?.status === 'disconnected' ||
+                getTabFocusedSession(tab)?.status === 'error'
+              "
               type="button"
               class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
               :title="t('terminal.reconnect')"
-              @click.stop="reconnectSession(session.id)"
+              @click.stop="
+                getTabFocusedSession(tab) && reconnectSession(getTabFocusedSession(tab)!.id)
+              "
             >
               <RotateCw class="h-3 w-3" />
             </button>
@@ -283,20 +408,26 @@ onMounted(async () => {
               type="button"
               class="rounded p-0.5 text-muted-foreground opacity-60 hover:bg-accent hover:text-foreground group-hover:opacity-100"
               :title="t('terminal.closeTab')"
-              @click.stop="sessionStore.closeSession(session.id)"
+              @click.stop="sessionStore.closeTab(tab.id)"
             >
               <X class="h-3 w-3" />
             </button>
           </div>
 
-          <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" @click="openNewHostDialog">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-7 w-7 shrink-0"
+            :title="t('terminal.openExistingSession')"
+            @click="quickConnectOpen = true"
+          >
             <Plus class="h-3.5 w-3.5" />
           </Button>
         </div>
 
         <!-- 欢迎空状态视图 -->
         <div
-          v-if="sessionStore.sessions.length === 0"
+          v-if="sessionStore.tabs.length === 0"
           class="relative flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center"
         >
           <div
@@ -330,33 +461,102 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 终端渲染区（保留后台会话实例状态） -->
-        <div v-else class="relative flex-1 min-h-0 overflow-hidden">
+        <!-- 终端渲染区（保留后台会话实例状态；支持全屏与无限分屏） -->
+        <div
+          v-else
+          :class="
+            terminalFullscreen
+              ? 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-background'
+              : 'relative flex-1 min-h-0 overflow-hidden'
+          "
+        >
           <div
-            v-for="session in sessionStore.sessions"
-            :key="session.id"
-            v-show="sessionStore.activeSessionId === session.id"
-            class="h-full w-full flex flex-col"
+            v-for="tab in sessionStore.tabs"
+            :key="tab.id"
+            v-show="sessionStore.activeTabId === tab.id"
+            :ref="(el) => setSplitContainerRef(tab.id, el)"
+            class="relative h-full w-full overflow-hidden"
           >
             <div
-              v-if="session.status === 'error' && session.errorMessage"
-              class="flex items-center justify-between border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+              v-for="leaf in tabLayouts.get(tab.id)?.leaves ?? []"
+              :key="leaf.paneId"
+              class="absolute flex flex-col overflow-hidden box-border"
+              :class="
+                (tabLayouts.get(tab.id)?.leaves.length ?? 1) > 1
+                  ? tab.focusedPaneId === leaf.paneId
+                    ? 'border border-primary/70'
+                    : 'border border-border/60'
+                  : ''
+              "
+              :style="{
+                left: `${leaf.rect.left}%`,
+                top: `${leaf.rect.top}%`,
+                width: `${leaf.rect.width}%`,
+                height: `${leaf.rect.height}%`,
+              }"
             >
-              <span class="truncate">{{ session.errorMessage }}</span>
-              <Button size="sm" variant="outline" class="h-6 text-[11px]" @click="reconnectSession(session.id)">
-                {{ t('terminal.reconnect') }}
-              </Button>
+              <div
+                v-if="
+                  sessionById.get(leaf.sessionId)?.status === 'error' &&
+                  sessionById.get(leaf.sessionId)?.errorMessage
+                "
+                class="flex shrink-0 items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+              >
+                <span class="truncate">{{ sessionById.get(leaf.sessionId)?.errorMessage }}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  class="h-6 shrink-0 text-[11px]"
+                  @click="reconnectSession(leaf.sessionId)"
+                >
+                  {{ t('terminal.reconnect') }}
+                </Button>
+              </div>
+              <TerminalView
+                :session-id="leaf.sessionId"
+                :visible="sessionStore.activeTabId === tab.id"
+                :focused="sessionStore.activeTabId === tab.id && tab.focusedPaneId === leaf.paneId"
+                :is-fullscreen="terminalFullscreen"
+                :can-close-split="(tabLayouts.get(tab.id)?.leaves.length ?? 1) > 1"
+                class="flex-1 min-h-0"
+                @focus-pane="sessionStore.focusPane(tab.id, leaf.paneId)"
+                @toggle-fullscreen="terminalFullscreen = !terminalFullscreen"
+                @split-horizontal="handleSplitPane(tab.id, leaf.paneId, 'horizontal')"
+                @split-vertical="handleSplitPane(tab.id, leaf.paneId, 'vertical')"
+                @close-split="sessionStore.closePane(tab.id, leaf.paneId)"
+              />
             </div>
-            <TerminalView
-              :session-id="session.id"
-              :active="sessionStore.activeSessionId === session.id"
-              class="flex-1 min-h-0"
+
+            <!-- 可拖拽调整大小的分屏分割线 -->
+            <div
+              v-for="divider in tabLayouts.get(tab.id)?.dividers ?? []"
+              :key="divider.splitId"
+              class="absolute z-20 transition-colors hover:bg-primary/45"
+              :class="
+                divider.direction === 'horizontal'
+                  ? 'w-1.5 -ml-[3px] cursor-col-resize'
+                  : 'h-1.5 -mt-[3px] cursor-row-resize'
+              "
+              :style="
+                divider.direction === 'horizontal'
+                  ? {
+                      left: `${divider.linePercent}%`,
+                      top: `${divider.parentRect.top}%`,
+                      height: `${divider.parentRect.height}%`,
+                    }
+                  : {
+                      left: `${divider.parentRect.left}%`,
+                      top: `${divider.linePercent}%`,
+                      width: `${divider.parentRect.width}%`,
+                    }
+              "
+              @pointerdown="startDividerDrag(tab.id, divider, $event)"
             />
           </div>
         </div>
       </main>
 
-      <!-- 右侧可折叠功能抽屉（小屏浮层、桌面端停靠） -->
+      <!-- 右侧可折叠功能抽屉（默认折叠，小屏浮层、桌面端停靠） -->
       <aside
         v-if="rightPanelOpen"
         class="absolute inset-y-0 right-0 z-30 flex w-80 lg:w-96 shrink-0 flex-col border-l border-border/75 bg-background/95 shadow-xl backdrop-blur-md md:static md:z-auto md:bg-card/50 md:shadow-none"
@@ -366,7 +566,7 @@ onMounted(async () => {
             type="button"
             class="rounded-md py-1.5 font-medium transition-colors cursor-pointer"
             :class="rightTab === 'sftp' ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'"
-            @click="rightTab = 'sftp'"
+            @click="openSftpDrawerTab"
           >
             {{ t('nav.sftp') }}
           </button>
@@ -410,6 +610,11 @@ onMounted(async () => {
       v-model:open="hostDialogOpen"
       :editing-host="editingHost"
       @saved="handleHostSaved"
+    />
+    <QuickConnectDialog
+      v-model:open="quickConnectOpen"
+      @select-host="connectToHost"
+      @new-host="openNewHostDialog"
     />
     <SettingsDialog v-model:open="settingsOpen" />
     <HostKeyDialog />

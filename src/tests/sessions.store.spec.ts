@@ -38,6 +38,44 @@ describe('useSessionStore 与 useSnippetStore 会话及命令管理', () => {
     expect(sessionStore.activeSessionId).toBe(s1.id);
   });
 
+  it('默认不自动激活 SFTP，仅在显式激活后标记；支持无限分屏、切换焦点与关闭分屏', async () => {
+    const sessionStore = useSessionStore();
+    const host = createEmptyHost();
+    host.name = 'Split Server';
+    host.host = '10.0.0.88';
+
+    const s1 = await sessionStore.openSession(host, [host]);
+    expect(s1.sftpActivated).toBe(false);
+    sessionStore.activateSftp(s1.id);
+    expect(s1.sftpActivated).toBe(true);
+
+    const tab = sessionStore.activeTab!;
+    const firstPaneId = tab.focusedPaneId;
+
+    const s2 = await sessionStore.splitPane(tab.id, firstPaneId, 'horizontal', [host]);
+    expect(s2).not.toBeNull();
+    expect(s2!.sftpActivated).toBe(false);
+    expect(sessionStore.sessions).toHaveLength(2);
+    expect(sessionStore.activeSessionId).toBe(s2!.id);
+
+    const secondPaneId = tab.focusedPaneId;
+    const s3 = await sessionStore.splitPane(tab.id, secondPaneId, 'vertical', [host]);
+    expect(s3).not.toBeNull();
+    expect(sessionStore.sessions).toHaveLength(3);
+
+    sessionStore.focusPane(tab.id, firstPaneId);
+    expect(sessionStore.activeSessionId).toBe(s1.id);
+
+    await sessionStore.closePane(tab.id, secondPaneId);
+    expect(sessionStore.sessions).toHaveLength(2);
+    expect(sessionStore.activeSessionId).toBe(s1.id);
+
+    await sessionStore.closeTab(tab.id);
+    expect(sessionStore.sessions).toHaveLength(0);
+    expect(sessionStore.tabs).toHaveLength(0);
+    expect(sessionStore.activeSessionId).toBeNull();
+  });
+
   it('快捷命令片段支持增删与关键词过滤', async () => {
     const snippetStore = useSnippetStore();
     await snippetStore.loadSnippets();

@@ -9,6 +9,7 @@ import {
   Plus,
   Server,
   ShieldCheck,
+  Star,
   Trash2,
   XCircle,
 } from 'lucide-vue-next';
@@ -292,18 +293,34 @@ async function submit(connectNow: boolean): Promise<void> {
         </div>
       </div>
 
-      <div class="space-y-1.5">
-        <Label>{{ t('hosts.form.color') }}</Label>
-        <div class="flex items-center gap-2 pt-1">
-          <button
-            v-for="c in CANDY_COLORS"
-            :key="c"
-            type="button"
-            class="h-6 w-6 rounded-full transition-transform hover:scale-110 cursor-pointer"
-            :class="form.color === c ? 'ring-2 ring-offset-2 ring-foreground scale-110' : ''"
-            :style="{ backgroundColor: c }"
-            @click="form.color = c"
-          />
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div class="space-y-1.5">
+          <Label>{{ t('hosts.form.color') }}</Label>
+          <div class="flex items-center gap-2 pt-1">
+            <button
+              v-for="c in CANDY_COLORS"
+              :key="c"
+              type="button"
+              class="h-6 w-6 rounded-full transition-transform hover:scale-110 cursor-pointer"
+              :class="form.color === c ? 'ring-2 ring-offset-2 ring-foreground scale-110' : ''"
+              :style="{ backgroundColor: c }"
+              @click="form.color = c"
+            />
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between rounded-xl border border-border/75 bg-muted/25 px-3 py-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <Star
+              class="h-4 w-4 shrink-0"
+              :class="form.favorite ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'"
+            />
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-foreground">{{ t('hosts.form.favorite') }}</p>
+              <p class="truncate text-[10px] text-muted-foreground">{{ t('hosts.form.favoriteDesc') }}</p>
+            </div>
+          </div>
+          <Switch v-model="form.favorite" />
         </div>
       </div>
 

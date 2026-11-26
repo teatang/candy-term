@@ -27,6 +27,13 @@ pub async fn save_hosts(state: State<'_, AppState>, hosts: Vec<HostProfile>) -> 
 }
 
 #[tauri::command]
+pub async fn export_hosts_file(path: String, hosts: Vec<HostProfile>) -> AppResult<()> {
+    let json = serde_json::to_string_pretty(&hosts)?;
+    tokio::fs::write(&path, json).await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn load_snippets(state: State<'_, AppState>) -> AppResult<Vec<CommandSnippet>> {
     state.store.load_snippets().await
 }
@@ -197,4 +204,42 @@ pub async fn ssh_fetch_metrics(
     session_id: String,
 ) -> AppResult<ServerMetrics> {
     state.ssh.fetch_metrics(&session_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AuthMethod, ProxyConfig};
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_export_hosts_file_writes_valid_json() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("candy-term-hosts.json");
+        let hosts = vec![HostProfile {
+            id: "h1".to_string(),
+            name: "Export Node".to_string(),
+            host: "10.0.0.1".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            group: "Default".to_string(),
+            color: "#ec4899".to_string(),
+            favorite: false,
+            tags: vec!["prod".to_string()],
+            notes: "".to_string(),
+            auth: AuthMethod::Agent,
+            proxy: ProxyConfig::None,
+            forwards: vec![],
+            keepalive_interval_secs: 30,
+            last_connected_at: None,
+        }];
+
+        export_hosts_file(target.to_string_lossy().to_string(), hosts.clone())
+            .await
+            .unwrap();
+
+        let written = tokio::fs::read_to_string(&target).await.unwrap();
+        let parsed: Vec<HostProfile> = serde_json::from_str(&written).unwrap();
+        assert_eq!(parsed, hosts);
+    }
 }

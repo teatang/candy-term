@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
+  CheckCircle2,
   Copy,
   Download,
   KeyRound,
@@ -14,11 +15,14 @@ import {
   Star,
   Trash2,
   Upload,
+  X,
+  XCircle,
 } from 'lucide-vue-next';
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
 import Badge from '@/components/ui/Badge.vue';
-import { useHostsStore } from '@/stores/hosts';
+import { cloneHostProfile, useHostsStore } from '@/stores/hosts';
+import { isTauriRuntime, tauriApi } from '@/lib/tauri';
 import type { HostProfile } from '@/types/ssh';
 
 const emit = defineEmits<{
@@ -30,7 +34,16 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const hostsStore = useHostsStore();
 const importInputRef = ref<HTMLInputElement | null>(null);
-const importFeedback = ref<string>('');
+const actionFeedback = ref<{ text: string; variant: 'success' | 'destructive' } | null>(null);
+let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showFeedback(text: string, variant: 'success' | 'destructive' = 'success'): void {
+  actionFeedback.value = { text, variant };
+  if (feedbackTimer) clearTimeout(feedbackTimer);
+  feedbackTimer = setTimeout(() => {
+    actionFeedback.value = null;
+  }, 3000);
+}
 
 const authLabelKey = (host: HostProfile): string => {
   switch (host.auth.type) {
@@ -47,15 +60,34 @@ const authLabelKey = (host: HostProfile): string => {
 
 const groupOptions = computed(() => ['__ALL__', ...hostsStore.groups]);
 
-function handleExport(): void {
-  const json = hostsStore.exportHostsJson();
-  const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'candy-term-hosts.json';
-  a.click();
-  URL.revokeObjectURL(url);
+async function handleExport(): Promise<void> {
+  try {
+    if (isTauriRuntime()) {
+      const savePath = await tauriApi.pickSavePath('candy-term-hosts.json', [
+        { name: 'JSON', extensions: ['json'] },
+      ]);
+      if (!savePath) return;
+      const plainHosts = hostsStore.hosts.map(cloneHostProfile);
+      await tauriApi.exportHostsFile(savePath, plainHosts);
+      showFeedback(t('hosts.exportSuccess'));
+      return;
+    }
+
+    const json = hostsStore.exportHostsJson();
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'candy-term-hosts.json';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showFeedback(t('hosts.exportSuccess'));
+  } catch (err) {
+    showFeedback(`${t('hosts.exportFailed')}: ${String(err)}`, 'destructive');
+  }
 }
 
 function triggerImport(): void {
@@ -69,10 +101,9 @@ async function handleImportFile(event: Event): Promise<void> {
   try {
     const text = await file.text();
     const count = await hostsStore.importHostsJson(text);
-    importFeedback.value = `+${count}`;
-    setTimeout(() => {
-      importFeedback.value = '';
-    }, 2500);
+    showFeedback(`+${count}`);
+  } catch (err) {
+    showFeedback(`${t('hosts.importFailed')}: ${String(err)}`, 'destructive');
   } finally {
     input.value = '';
   }
@@ -83,9 +114,9 @@ async function handleImportFile(event: Event): Promise<void> {
   <!-- 左侧主机连接列表栏（支持分组、收藏、导入导出与快速搜索） -->
   <aside class="flex h-full flex-col bg-card/60 backdrop-blur-md">
     <div class="flex items-center justify-between gap-2 border-b border-border/70 px-3.5 py-3">
-      <div class="flex items-center gap-2">
-        <Server class="h-4 w-4 text-primary" />
-        <span class="text-xs font-semibold tracking-wide uppercase text-muted-foreground">
+      <div class="flex min-w-0 items-center gap-2">
+        <Server class="h-4 w-4 shrink-0 text-primary" />
+        <span class="truncate whitespace-nowrap text-xs font-semibold tracking-wide text-muted-foreground">
           {{ t('hosts.title') }}
         </span>
       </div>
@@ -160,8 +191,30 @@ async function handleImportFile(event: Event): Promise<void> {
         >
           {{ group === '__ALL__' ? t('hosts.allGroups') : group }}
         </button>
+      </div>
 
-        <Badge v-if="importFeedback" variant="success">{{ importFeedback }}</Badge>
+      <!-- 导入/导出操作反馈条（独立一行，不被分组横滑容器裁剪） -->
+      <div
+        v-if="actionFeedback"
+        class="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium"
+        :class="
+          actionFeedback.variant === 'destructive'
+            ? 'border-destructive/30 bg-destructive/10 text-destructive'
+            : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+        "
+      >
+        <div class="flex min-w-0 items-center gap-1.5">
+          <XCircle v-if="actionFeedback.variant === 'destructive'" class="h-3.5 w-3.5 shrink-0" />
+          <CheckCircle2 v-else class="h-3.5 w-3.5 shrink-0" />
+          <span class="truncate">{{ actionFeedback.text }}</span>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100 cursor-pointer"
+          @click="actionFeedback = null"
+        >
+          <X class="h-3 w-3" />
+        </button>
       </div>
     </div>
 
@@ -252,6 +305,19 @@ async function handleImportFile(event: Event): Promise<void> {
         <div
           class="mt-2 flex items-center justify-end gap-1 border-t border-border/50 pt-2 opacity-80 group-hover:opacity-100"
         >
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] transition-colors cursor-pointer"
+            :class="
+              host.favorite
+                ? 'text-amber-600 hover:bg-amber-500/10 dark:text-amber-300'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+            "
+            @click.stop="hostsStore.toggleFavorite(host.id)"
+          >
+            <Star class="h-3 w-3" :class="host.favorite ? 'fill-amber-400 text-amber-400' : ''" />
+            {{ host.favorite ? t('hosts.unfavorite') : t('hosts.favorite') }}
+          </button>
           <button
             type="button"
             class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"

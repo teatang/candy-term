@@ -6,7 +6,19 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
-import { ArrowDown, ArrowUp, Eraser, Search, X, ZoomIn, ZoomOut } from 'lucide-vue-next';
+import {
+  ArrowDown,
+  ArrowUp,
+  Columns2,
+  Eraser,
+  Maximize2,
+  Minimize2,
+  Rows2,
+  Search,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-vue-next';
 import Input from '@/components/ui/Input.vue';
 import Button from '@/components/ui/Button.vue';
 import { useSettingsStore } from '@/stores/settings';
@@ -14,10 +26,25 @@ import { useSessionStore } from '@/stores/sessions';
 
 interface Props {
   sessionId: string;
-  active: boolean;
+  visible: boolean;
+  focused: boolean;
+  isFullscreen?: boolean;
+  canCloseSplit?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  isFullscreen: false,
+  canCloseSplit: false,
+});
+
+const emit = defineEmits<{
+  focusPane: [];
+  toggleFullscreen: [];
+  splitHorizontal: [];
+  splitVertical: [];
+  closeSplit: [];
+}>();
+
 const { t } = useI18n();
 const settings = useSettingsStore();
 const sessionStore = useSessionStore();
@@ -82,7 +109,7 @@ const xtermTheme = computed(() =>
 );
 
 function syncTerminalFit(): void {
-  if (!terminal || !fitAddon || !props.active) return;
+  if (!terminal || !fitAddon || !props.visible) return;
   try {
     fitAddon.fit();
     void sessionStore.resizeSession(props.sessionId, terminal.cols, terminal.rows);
@@ -121,6 +148,10 @@ onMounted(() => {
   terminal.open(containerRef.value);
   fitAddon.fit();
 
+  if (props.focused) {
+    terminal.focus();
+  }
+
   terminal.onData((data) => {
     void sessionStore.sendInput(props.sessionId, data);
   });
@@ -136,14 +167,39 @@ onMounted(() => {
 });
 
 watch(
-  () => props.active,
-  (isActive) => {
-    if (isActive) {
+  () => props.visible,
+  (isVisible) => {
+    if (isVisible) {
       requestAnimationFrame(() => {
         syncTerminalFit();
+        if (props.focused) {
+          terminal?.focus();
+        }
+      });
+    }
+  },
+);
+
+watch(
+  () => props.focused,
+  (isFocused) => {
+    if (isFocused && props.visible) {
+      requestAnimationFrame(() => {
         terminal?.focus();
       });
     }
+  },
+);
+
+watch(
+  () => props.isFullscreen,
+  () => {
+    requestAnimationFrame(() => {
+      syncTerminalFit();
+      if (props.focused) {
+        terminal?.focus();
+      }
+    });
   },
 );
 
@@ -177,11 +233,20 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 基于 xterm.js 的高性能终端视图（支持搜索、自适应尺寸与主题实时切换） -->
-  <div class="relative flex h-full w-full flex-col overflow-hidden" @keydown="handleKeydown">
+  <!-- 基于 xterm.js 的高性能终端视图（支持搜索、分屏、全屏、自适应尺寸与主题实时切换） -->
+  <div
+    class="relative flex h-full w-full flex-col overflow-hidden"
+    @mousedown="emit('focusPane')"
+    @keydown="handleKeydown"
+  >
     <!-- 顶部微工具条 -->
-    <div class="flex items-center justify-between border-b border-border/60 bg-card/50 px-3 py-1.5 text-xs">
-      <div class="flex items-center gap-1.5 text-muted-foreground">
+    <div class="flex flex-wrap items-center justify-between gap-1 border-b border-border/60 bg-card/50 px-2.5 py-1 text-xs">
+      <div class="flex items-center gap-1 text-muted-foreground">
+        <span
+          v-if="canCloseSplit"
+          class="mr-1 h-2 w-2 shrink-0 rounded-full transition-colors"
+          :class="focused ? 'bg-primary' : 'bg-muted-foreground/30'"
+        />
         <Button
           variant="ghost"
           size="icon"
@@ -200,7 +265,7 @@ onBeforeUnmount(() => {
         >
           <ZoomOut class="h-3.5 w-3.5" />
         </Button>
-        <span class="w-8 text-center font-mono text-[11px]">{{ settings.fontSize }}</span>
+        <span class="w-7 text-center font-mono text-[11px]">{{ settings.fontSize }}</span>
         <Button
           variant="ghost"
           size="icon"
@@ -212,12 +277,12 @@ onBeforeUnmount(() => {
         </Button>
       </div>
 
-      <div class="flex items-center gap-1.5">
+      <div class="flex items-center gap-1">
         <div v-if="showSearch" class="flex items-center gap-1">
           <Input
             v-model="searchText"
             :placeholder="t('terminal.searchPlaceholder')"
-            class="h-6 w-44 text-xs"
+            class="h-6 w-36 sm:w-44 text-xs"
             @keydown.enter="searchAddon?.findNext(searchText)"
           />
           <Button
@@ -247,9 +312,53 @@ onBeforeUnmount(() => {
           variant="ghost"
           size="icon"
           class="h-6 w-6"
+          :title="t('terminal.searchPlaceholder')"
           @click="showSearch = true"
         >
           <Search class="h-3.5 w-3.5" />
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          class="h-6 w-6"
+          :class="isFullscreen ? 'bg-accent text-accent-foreground' : ''"
+          :title="isFullscreen ? t('terminal.exitFullscreen') : t('terminal.fullscreen')"
+          @click.stop="emit('toggleFullscreen')"
+        >
+          <Minimize2 v-if="isFullscreen" class="h-3.5 w-3.5" />
+          <Maximize2 v-else class="h-3.5 w-3.5" />
+        </Button>
+
+        <div class="mx-0.5 h-3.5 w-px bg-border/70" />
+
+        <Button
+          variant="ghost"
+          size="icon"
+          class="h-6 w-6"
+          :title="t('terminal.splitHorizontal')"
+          @click.stop="emit('splitHorizontal')"
+        >
+          <Columns2 class="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="h-6 w-6"
+          :title="t('terminal.splitVertical')"
+          @click.stop="emit('splitVertical')"
+        >
+          <Rows2 class="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          v-if="canCloseSplit"
+          variant="ghost"
+          size="icon"
+          class="h-6 w-6 text-muted-foreground hover:text-destructive"
+          :title="t('terminal.closeSplit')"
+          @click.stop="emit('closeSplit')"
+        >
+          <X class="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>

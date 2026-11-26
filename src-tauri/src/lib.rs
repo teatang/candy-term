@@ -34,6 +34,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_hosts,
             commands::save_hosts,
+            commands::export_hosts_file,
             commands::load_snippets,
             commands::save_snippets,
             commands::load_known_hosts,
