@@ -120,6 +120,10 @@ export default {
     splitHorizontal: '左右分屏',
     splitVertical: '上下分屏',
     closeSplit: '关闭分屏',
+    connectingMessage: '正在连接到 {target}...',
+    connectedMessage: '已连接到 {target}',
+    connectFailedMessage: '连接失败：{error}',
+    disconnectedMessage: '连接已断开',
     broadcastInput: '向全部会话广播指令',
     status: {
       connecting: '正在连接...',

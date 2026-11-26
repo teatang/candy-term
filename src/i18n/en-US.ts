@@ -120,6 +120,10 @@ export default {
     splitHorizontal: 'Split Horizontally',
     splitVertical: 'Split Vertically',
     closeSplit: 'Close Split',
+    connectingMessage: 'Connecting to {target}...',
+    connectedMessage: 'Connected to {target}',
+    connectFailedMessage: 'Connection failed: {error}',
+    disconnectedMessage: 'Connection closed',
     broadcastInput: 'Broadcast command to all sessions',
     status: {
       connecting: 'Connecting...',

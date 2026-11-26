@@ -61,13 +61,13 @@ let resizeObserver: ResizeObserver | null = null;
 const xtermTheme = computed(() =>
   settings.isDark
     ? {
-        background: '#111119',
-        foreground: '#eceaf4',
+        background: '#12131c',
+        foreground: '#ebe9f5',
         cursor: '#f472b6',
-        cursorAccent: '#111119',
+        cursorAccent: '#12131c',
         selectionBackground: 'rgba(244, 114, 182, 0.28)',
-        black: '#1f1f2b',
-        red: '#f87171',
+        black: '#232536',
+        red: '#fb7185',
         green: '#34d399',
         yellow: '#fbbf24',
         blue: '#60a5fa',
@@ -75,7 +75,7 @@ const xtermTheme = computed(() =>
         cyan: '#22d3ee',
         white: '#e2e8f0',
         brightBlack: '#64748b',
-        brightRed: '#fca5a5',
+        brightRed: '#fda4af',
         brightGreen: '#6ee7b7',
         brightYellow: '#fde68a',
         brightBlue: '#93c5fd',
@@ -84,27 +84,27 @@ const xtermTheme = computed(() =>
         brightWhite: '#ffffff',
       }
     : {
-        background: '#fafafa',
-        foreground: '#1e1b2e',
+        background: '#f6f7fb',
+        foreground: '#1e2030',
         cursor: '#db2777',
-        cursorAccent: '#fafafa',
-        selectionBackground: 'rgba(219, 39, 119, 0.18)',
+        cursorAccent: '#f6f7fb',
+        selectionBackground: 'rgba(219, 39, 119, 0.16)',
         black: '#1e293b',
-        red: '#dc2626',
+        red: '#e11d48',
         green: '#059669',
         yellow: '#d97706',
         blue: '#2563eb',
         magenta: '#c026d3',
         cyan: '#0891b2',
-        white: '#f1f5f9',
+        white: '#475569',
         brightBlack: '#64748b',
-        brightRed: '#ef4444',
+        brightRed: '#f43f5e',
         brightGreen: '#10b981',
         brightYellow: '#f59e0b',
         brightBlue: '#3b82f6',
         brightMagenta: '#d946ef',
         brightCyan: '#06b6d4',
-        brightWhite: '#ffffff',
+        brightWhite: '#0f172a',
       },
 );
 
@@ -233,15 +233,23 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 基于 xterm.js 的高性能终端视图（支持搜索、分屏、全屏、自适应尺寸与主题实时切换） -->
+  <!-- 基于 xterm.js 的高性能终端视图（无分割线一体化配色，支持搜索、分屏、全屏与主题实时切换） -->
   <div
     class="relative flex h-full w-full flex-col overflow-hidden"
+    :style="{ backgroundColor: xtermTheme.background }"
     @mousedown="emit('focusPane')"
     @keydown="handleKeydown"
   >
-    <!-- 顶部微工具条 -->
-    <div class="flex flex-wrap items-center justify-between gap-1 border-b border-border/60 bg-card/50 px-2.5 py-1 text-xs">
-      <div class="flex items-center gap-1 text-muted-foreground">
+    <!-- 顶部微工具条（融入终端背景，无分割线） -->
+    <div
+      class="flex flex-wrap items-center justify-between gap-1 px-2.5 py-1 text-xs"
+      :class="
+        settings.isDark
+          ? 'text-slate-400 [&_button]:hover:bg-white/10 [&_button]:hover:text-slate-100'
+          : 'text-slate-500 [&_button]:hover:bg-black/6 [&_button]:hover:text-slate-900'
+      "
+    >
+      <div class="flex items-center gap-1">
         <span
           v-if="canCloseSplit"
           class="mr-1 h-2 w-2 shrink-0 rounded-full transition-colors"
@@ -322,15 +330,13 @@ onBeforeUnmount(() => {
           variant="ghost"
           size="icon"
           class="h-6 w-6"
-          :class="isFullscreen ? 'bg-accent text-accent-foreground' : ''"
+          :class="isFullscreen ? 'bg-primary/15 text-primary' : ''"
           :title="isFullscreen ? t('terminal.exitFullscreen') : t('terminal.fullscreen')"
           @click.stop="emit('toggleFullscreen')"
         >
           <Minimize2 v-if="isFullscreen" class="h-3.5 w-3.5" />
           <Maximize2 v-else class="h-3.5 w-3.5" />
         </Button>
-
-        <div class="mx-0.5 h-3.5 w-px bg-border/70" />
 
         <Button
           variant="ghost"

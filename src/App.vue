@@ -482,10 +482,8 @@ onMounted(async () => {
               :key="leaf.paneId"
               class="absolute flex flex-col overflow-hidden box-border"
               :class="
-                (tabLayouts.get(tab.id)?.leaves.length ?? 1) > 1
-                  ? tab.focusedPaneId === leaf.paneId
-                    ? 'border border-primary/70'
-                    : 'border border-border/60'
+                (tabLayouts.get(tab.id)?.leaves.length ?? 1) > 1 && tab.focusedPaneId === leaf.paneId
+                  ? 'ring-1 ring-inset ring-primary/45'
                   : ''
               "
               :style="{

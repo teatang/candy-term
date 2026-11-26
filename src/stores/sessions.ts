@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
+import { i18n } from '@/i18n';
 import {
   isTauriRuntime,
   tauriApi,
@@ -92,6 +93,13 @@ export const useSessionStore = defineStore('sessions', () => {
       if (target) {
         target.status = status;
         target.errorMessage = message;
+        if (status === 'disconnected') {
+          const text = message || i18n.global.t('terminal.disconnectedMessage');
+          emitOutputChunk(sessionId, `\r\n\x1b[90m• ${text}\x1b[0m\r\n`);
+        } else if (status === 'error') {
+          const text = message || i18n.global.t('terminal.status.error');
+          emitOutputChunk(sessionId, `\r\n\x1b[31m✖ ${text}\x1b[0m\r\n`);
+        }
       }
     });
 
@@ -144,10 +152,16 @@ export const useSessionStore = defineStore('sessions', () => {
     rows: number,
     autoStartForwards: boolean,
   ): Promise<void> {
+    const targetLabel = `${host.username}@${host.host}:${host.port}`;
+    emitOutputChunk(
+      session.id,
+      `\r\n\x1b[38;5;212m▸\x1b[0m \x1b[36m${i18n.global.t('terminal.connectingMessage', { target: targetLabel })}\x1b[0m\r\n`,
+    );
+
     if (!isTauriRuntime()) {
       session.status = 'connected';
       const welcome =
-        `\r\n\x1b[38;5;212m🍬 candy-term preview shell\x1b[0m (${host.username}@${host.host}:${host.port})\r\n` +
+        `\x1b[38;5;212m🍬 candy-term preview shell\x1b[0m (${targetLabel})\r\n` +
         `\x1b[90mNote: Browser preview mode active. Launch via \`pnpm tauri dev\` for native Rust SSH/SFTP.\x1b[0m\r\n\r\n` +
         `${host.username}@${host.host}:~$ `;
       emitOutputChunk(session.id, welcome);
@@ -157,6 +171,10 @@ export const useSessionStore = defineStore('sessions', () => {
     try {
       await tauriApi.connectSession(session.id, host, allHosts, cols, rows);
       session.status = 'connected';
+      emitOutputChunk(
+        session.id,
+        `\x1b[32m✓ ${i18n.global.t('terminal.connectedMessage', { target: targetLabel })}\x1b[0m\r\n`,
+      );
 
       if (autoStartForwards) {
         for (const rule of host.forwards.filter((f) => f.autoStart)) {
@@ -178,8 +196,13 @@ export const useSessionStore = defineStore('sessions', () => {
         }
       }
     } catch (err) {
+      const errText = String(err);
       session.status = 'error';
-      session.errorMessage = String(err);
+      session.errorMessage = errText;
+      emitOutputChunk(
+        session.id,
+        `\r\n\x1b[31m✖ ${i18n.global.t('terminal.connectFailedMessage', { error: errText })}\x1b[0m\r\n`,
+      );
     }
   }
 
