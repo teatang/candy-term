@@ -1,6 +1,6 @@
 [package]
 name = "candy-term"
-version = "0.1.4"
+version = "0.1.5"
 description = "candy-term / 糖果终端 — High-performance SSH & SFTP desktop client built with Rust and Tauri"
 authors = ["candy-term contributors"]
 license = "MIT"
