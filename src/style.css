@@ -110,12 +110,14 @@
   background: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
 }
 
-/* xterm 终端容器自适应撑满 */
+/* xterm 终端容器自适应撑满（外层容器负责留白，.xterm 保持零内边距以保证 FitAddon 精确计算与滚动条贴边） */
 .candy-terminal-container .xterm {
   height: 100%;
-  padding: 8px 10px;
+  width: 100%;
+  padding: 0;
 }
 
 .candy-terminal-container .xterm-viewport {
   overflow-y: auto !important;
+  background-color: transparent !important;
 }

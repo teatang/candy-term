@@ -149,6 +149,7 @@ function openSftpDrawerTab(): void {
 
 // 分屏拖拽调整比例状态
 const splitContainerRefs = new Map<string, HTMLElement>();
+const activeDividerId = ref<string | null>(null);
 let activeDragCleanup: (() => void) | null = null;
 
 function setSplitContainerRef(tabId: string, el: unknown): void {
@@ -164,6 +165,7 @@ function startDividerDrag(tabId: string, divider: PositionedDivider, event: Poin
   if (!container) return;
   event.preventDefault();
   activeDragCleanup?.();
+  activeDividerId.value = divider.splitId;
 
   const handleMove = (moveEvent: PointerEvent) => {
     const rect = container.getBoundingClientRect();
@@ -181,6 +183,7 @@ function startDividerDrag(tabId: string, divider: PositionedDivider, event: Poin
   };
 
   const handleUp = () => {
+    activeDividerId.value = null;
     activeDragCleanup?.();
     activeDragCleanup = null;
   };
@@ -481,11 +484,12 @@ onMounted(async () => {
               v-for="leaf in tabLayouts.get(tab.id)?.leaves ?? []"
               :key="leaf.paneId"
               class="absolute flex flex-col overflow-hidden box-border"
-              :class="
+              :class="[
                 (tabLayouts.get(tab.id)?.leaves.length ?? 1) > 1 && tab.focusedPaneId === leaf.paneId
                   ? 'ring-1 ring-inset ring-primary/45'
-                  : ''
-              "
+                  : '',
+                activeDividerId !== null ? 'pointer-events-none select-none' : '',
+              ]"
               :style="{
                 left: `${leaf.rect.left}%`,
                 top: `${leaf.rect.top}%`,
@@ -525,15 +529,16 @@ onMounted(async () => {
               />
             </div>
 
-            <!-- 可拖拽调整大小的分屏分割线 -->
+            <!-- 可拖拽调整大小的分屏分割线（宽热区 + 居中细线 + 悬停/拖拽高亮手柄） -->
             <div
               v-for="divider in tabLayouts.get(tab.id)?.dividers ?? []"
               :key="divider.splitId"
-              class="absolute z-20 transition-colors hover:bg-primary/45"
+              data-split-divider
+              class="group/divider absolute z-20 flex items-center justify-center"
               :class="
                 divider.direction === 'horizontal'
-                  ? 'w-1.5 -ml-[3px] cursor-col-resize'
-                  : 'h-1.5 -mt-[3px] cursor-row-resize'
+                  ? 'w-2 -ml-1 cursor-col-resize'
+                  : 'h-2 -mt-1 cursor-row-resize'
               "
               :style="
                 divider.direction === 'horizontal'
@@ -549,7 +554,30 @@ onMounted(async () => {
                     }
               "
               @pointerdown="startDividerDrag(tab.id, divider, $event)"
-            />
+            >
+              <span
+                class="pointer-events-none block transition-all duration-150"
+                :class="[
+                  divider.direction === 'horizontal' ? 'h-full' : 'w-full',
+                  activeDividerId === divider.splitId
+                    ? divider.direction === 'horizontal'
+                      ? 'w-[2px] bg-primary shadow-[0_0_8px_var(--color-primary)]'
+                      : 'h-[2px] bg-primary shadow-[0_0_8px_var(--color-primary)]'
+                    : divider.direction === 'horizontal'
+                      ? 'w-px bg-border/80 group-hover/divider:w-[2px] group-hover/divider:bg-primary/80 dark:bg-white/15'
+                      : 'h-px bg-border/80 group-hover/divider:h-[2px] group-hover/divider:bg-primary/80 dark:bg-white/15',
+                ]"
+              />
+              <span
+                class="pointer-events-none absolute rounded-full transition-all duration-150"
+                :class="[
+                  divider.direction === 'horizontal' ? 'h-7 w-1' : 'h-1 w-7',
+                  activeDividerId === divider.splitId
+                    ? 'bg-primary opacity-100 scale-100'
+                    : 'bg-primary/80 opacity-0 scale-75 group-hover/divider:opacity-100 group-hover/divider:scale-100',
+                ]"
+              />
+            </div>
           </div>
         </div>
       </main>

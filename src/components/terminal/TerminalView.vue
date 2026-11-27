@@ -61,10 +61,10 @@ let resizeObserver: ResizeObserver | null = null;
 const xtermTheme = computed(() =>
   settings.isDark
     ? {
-        background: '#12131c',
+        background: '#10111a',
         foreground: '#ebe9f5',
         cursor: '#f472b6',
-        cursorAccent: '#12131c',
+        cursorAccent: '#10111a',
         selectionBackground: 'rgba(244, 114, 182, 0.28)',
         black: '#232536',
         red: '#fb7185',
@@ -84,10 +84,10 @@ const xtermTheme = computed(() =>
         brightWhite: '#ffffff',
       }
     : {
-        background: '#f6f7fb',
+        background: '#f8f9fc',
         foreground: '#1e2030',
         cursor: '#db2777',
-        cursorAccent: '#f6f7fb',
+        cursorAccent: '#f8f9fc',
         selectionBackground: 'rgba(219, 39, 119, 0.16)',
         black: '#1e293b',
         red: '#e11d48',
@@ -107,6 +107,10 @@ const xtermTheme = computed(() =>
         brightWhite: '#0f172a',
       },
 );
+
+const toolbarStyle = computed(() => ({
+  backgroundColor: settings.isDark ? '#1a1c28' : '#eceef5',
+}));
 
 function syncTerminalFit(): void {
   if (!terminal || !fitAddon || !props.visible) return;
@@ -233,20 +237,21 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 基于 xterm.js 的高性能终端视图（无分割线一体化配色，支持搜索、分屏、全屏与主题实时切换） -->
+  <!-- 基于 xterm.js 的高性能终端视图（工具条与终端画布采用无分割线色阶区分，支持搜索、分屏、全屏与主题实时切换） -->
   <div
     class="relative flex h-full w-full flex-col overflow-hidden"
     :style="{ backgroundColor: xtermTheme.background }"
     @mousedown="emit('focusPane')"
     @keydown="handleKeydown"
   >
-    <!-- 顶部微工具条（融入终端背景，无分割线） -->
+    <!-- 顶部微工具条（通过柔和色阶与终端画布自然区分，无分割线） -->
     <div
-      class="flex flex-wrap items-center justify-between gap-1 px-2.5 py-1 text-xs"
+      class="flex flex-wrap items-center justify-between gap-1 px-2 py-1 text-xs transition-colors"
+      :style="toolbarStyle"
       :class="
         settings.isDark
-          ? 'text-slate-400 [&_button]:hover:bg-white/10 [&_button]:hover:text-slate-100'
-          : 'text-slate-500 [&_button]:hover:bg-black/6 [&_button]:hover:text-slate-900'
+          ? 'text-slate-300/85 [&_button]:hover:bg-white/10 [&_button]:hover:text-white'
+          : 'text-slate-600 [&_button]:hover:bg-black/6 [&_button]:hover:text-slate-900'
       "
     >
       <div class="flex items-center gap-1">
@@ -369,11 +374,13 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- xterm 挂载容器 -->
-    <div
-      ref="containerRef"
-      class="candy-terminal-container flex-1 overflow-hidden"
-      :style="{ backgroundColor: xtermTheme.background }"
-    />
+    <!-- xterm 挂载容器（由外层包装提供呼吸留白，保证滚动条贴边与 FitAddon 尺寸精确） -->
+    <div class="flex-1 min-h-0 overflow-hidden pl-3 pr-1 pt-2 pb-2">
+      <div
+        ref="containerRef"
+        class="candy-terminal-container h-full w-full overflow-hidden"
+        :style="{ backgroundColor: xtermTheme.background }"
+      />
+    </div>
   </div>
 </template>

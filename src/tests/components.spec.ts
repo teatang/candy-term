@@ -136,6 +136,10 @@ describe('Vue 核心 UI 组件集成测试', () => {
 
     expect(wrapper.text()).toContain('SFTP 文件浏览器');
     expect(session.sftpActivated).toBe(true);
+
+    // 分屏后应渲染可视分割线
+    await sessionStore.splitPane(sessionStore.activeTabId!, sessionStore.activeTab!.focusedPaneId, 'horizontal', [host]);
+    expect(wrapper.findAll('[data-split-divider]')).toHaveLength(1);
   });
 
   it('TerminalView 渲染全屏、左右分屏、上下分屏与关闭分屏按钮并触发事件', async () => {
